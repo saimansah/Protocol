@@ -1,0 +1,21 @@
+# Node modules & build
+node_modules
+/.next/
+/out/
+/build
+
+# Environment variables
+.env*.local
+.env
+
+# Testing & logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# OS & Editor
+.DS_Store
+*.pem
+.vscode
+.idea
