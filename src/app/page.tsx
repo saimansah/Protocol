@@ -136,10 +136,29 @@ export default function Home() {
         throw new Error('Please enter the Security Cipher to access this room.');
       }
 
-      const { data, error: joinErr } = await supabase.rpc('verify_and_join_classified_room', {
+      let { data, error: joinErr } = await supabase.rpc('verify_and_join_classified_room', {
         p_room_id: cleanRoomId,
         p_password: joinRequiresPass ? joinPassword : null,
       });
+
+      // Self-healing recovery: If foreign key violation or stale session occurs, clear session and retry
+      if (
+        joinErr &&
+        (joinErr.message?.includes('foreign key constraint') ||
+          joinErr.message?.includes('room_members_user_id_fkey') ||
+          joinErr.message?.includes('violates foreign key'))
+      ) {
+        console.warn('Foreign key constraint violation detected on join. Refreshing auth session and retrying...');
+        await supabase.auth.signOut();
+        await ensureAnonymousAuth({ forceRefresh: true });
+
+        const retryResult = await supabase.rpc('verify_and_join_classified_room', {
+          p_room_id: cleanRoomId,
+          p_password: joinRequiresPass ? joinPassword : null,
+        });
+        data = retryResult.data;
+        joinErr = retryResult.error;
+      }
 
       if (joinErr || !data?.success) {
         throw new Error('Access Denied: Invalid Room Code or Security Cipher.');
@@ -208,11 +227,31 @@ export default function Home() {
       await ensureAnonymousAuth({ captchaToken });
       sessionStorage.setItem('protocol_callsign', finalName);
 
-      const { data, error: rpcErr } = await supabase.rpc('create_classified_room', {
+      let { data, error: rpcErr } = await supabase.rpc('create_classified_room', {
         p_access_type: createType,
         p_password: createType === 'password' ? createPassword : null,
         p_room_code: cleanCustomCode || null,
       });
+
+      // Self-healing recovery: If foreign key violation or stale session occurs, clear session and retry
+      if (
+        rpcErr &&
+        (rpcErr.message?.includes('foreign key constraint') ||
+          rpcErr.message?.includes('rooms_created_by_fkey') ||
+          rpcErr.message?.includes('violates foreign key'))
+      ) {
+        console.warn('Foreign key constraint violation detected (stale auth token). Refreshing auth session and retrying...');
+        await supabase.auth.signOut();
+        await ensureAnonymousAuth({ forceRefresh: true });
+
+        const retryResult = await supabase.rpc('create_classified_room', {
+          p_access_type: createType,
+          p_password: createType === 'password' ? createPassword : null,
+          p_room_code: cleanCustomCode || null,
+        });
+        data = retryResult.data;
+        rpcErr = retryResult.error;
+      }
 
       if (rpcErr || (!data?.code && !data?.room_id)) {
         throw new Error(rpcErr?.message || 'Room creation failed.');

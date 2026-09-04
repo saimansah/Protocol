@@ -169,10 +169,29 @@ function RoomTerminal() {
     try {
       await ensureAnonymousAuth();
 
-      const { data, error } = await supabase.rpc('verify_and_join_classified_room', {
+      let { data, error } = await supabase.rpc('verify_and_join_classified_room', {
         p_room_id: roomId,
         p_password: unlockPassword,
       });
+
+      // Self-healing recovery: If foreign key violation or stale session occurs, clear session and retry
+      if (
+        error &&
+        (error.message?.includes('foreign key constraint') ||
+          error.message?.includes('room_members_user_id_fkey') ||
+          error.message?.includes('violates foreign key'))
+      ) {
+        console.warn('Foreign key constraint violation detected on unlock. Refreshing auth session and retrying...');
+        await supabase.auth.signOut();
+        await ensureAnonymousAuth({ forceRefresh: true });
+
+        const retryResult = await supabase.rpc('verify_and_join_classified_room', {
+          p_room_id: roomId,
+          p_password: unlockPassword,
+        });
+        data = retryResult.data;
+        error = retryResult.error;
+      }
 
       if (error || !data?.success) {
         throw new Error('Access Denied: Incorrect Security Password.');
@@ -614,15 +633,13 @@ function RoomTerminal() {
           {messages.map((msg) => (
             <div
               key={msg.id}
-              className={`flex flex-col ${msg.self ? 'items-end' : 'items-start'} max-w-xl ${
-                msg.self ? 'ml-auto' : 'mr-auto'
-              }`}
+              className={`flex flex-col ${msg.self ? 'items-end' : 'items-start'} max-w-xl ${msg.self ? 'ml-auto' : 'mr-auto'
+                }`}
             >
               <div className="flex items-center gap-2 mb-1 px-1 text-[11px]">
                 <span
-                  className={`font-bold font-syne ${
-                    msg.self ? 'text-[#00e5ff]' : 'text-[#7b61ff]'
-                  }`}
+                  className={`font-bold font-syne ${msg.self ? 'text-[#00e5ff]' : 'text-[#7b61ff]'
+                    }`}
                 >
                   {msg.sender}
                 </span>
@@ -630,11 +647,10 @@ function RoomTerminal() {
               </div>
 
               <div
-                className={`px-4 py-2.5 rounded-2xl text-xs sm:text-sm leading-relaxed break-words shadow-sm ${
-                  msg.self
+                className={`px-4 py-2.5 rounded-2xl text-xs sm:text-sm leading-relaxed break-words shadow-sm ${msg.self
                     ? 'bg-[#1a1e2b] border border-[#00e5ff]/40 text-white rounded-tr-none'
                     : 'bg-[#131620] border border-[#252a3a] text-slate-200 rounded-tl-none'
-                }`}
+                  }`}
               >
                 {msg.text}
               </div>

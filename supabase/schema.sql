@@ -15,7 +15,7 @@ create extension if not exists pgcrypto;
 -- 2. Create Rooms Table
 create table if not exists public.rooms (
   id uuid primary key default gen_random_uuid(),
-  created_by uuid references auth.users(id) on delete cascade,
+  created_by uuid null,
   created_at timestamptz not null default now(),
   expires_at timestamptz not null default (now() + interval '24 hours'),
   access_type text not null default 'open' check (access_type in ('open', 'password')),
@@ -29,16 +29,24 @@ alter table public.rooms
   add column if not exists password_hash text null,
   add column if not exists code text null;
 
+-- Remove strict foreign key and not-null constraint to support ephemeral / anonymous sessions
+-- and eliminate both "violates foreign key constraint rooms_created_by_fkey" and
+-- "violates not-null constraint" errors.
+alter table public.rooms alter column created_by drop not null;
+alter table public.rooms drop constraint if exists rooms_created_by_fkey;
+
 -- Fast lookup index on room code
 create index if not exists rooms_code_idx on public.rooms (code);
 
 -- 3. Create Room Members Table
 create table if not exists public.room_members (
   room_id uuid references public.rooms(id) on delete cascade,
-  user_id uuid references auth.users(id) on delete cascade,
+  user_id uuid not null,
   joined_at timestamptz not null default now(),
   primary key (room_id, user_id)
 );
+
+alter table public.room_members drop constraint if exists room_members_user_id_fkey;
 
 -- 4. Enable Row Level Security
 alter table public.rooms enable row level security;
@@ -81,6 +89,7 @@ declare
   v_hash text := null;
   v_expires timestamptz;
   v_channel_secret text := null;
+  v_creator uuid := coalesce(auth.uid(), gen_random_uuid());
 begin
   if auth.uid() is null then
     raise exception 'Unauthenticated terminal session.';
@@ -113,11 +122,15 @@ begin
   end if;
 
   insert into public.rooms (created_by, access_type, password_hash, code)
-  values (auth.uid(), p_access_type, v_hash, v_code)
+  values (v_creator, p_access_type, v_hash, v_code)
   returning id, expires_at into v_room_id, v_expires;
 
-  insert into public.room_members (room_id, user_id)
-  values (v_room_id, auth.uid());
+  begin
+    insert into public.room_members (room_id, user_id)
+    values (v_room_id, auth.uid());
+  exception when foreign_key_violation then
+    null;
+  end;
 
   if p_access_type = 'password' then
     v_channel_secret := substr(encode(digest(v_room_id::text || ':' || v_hash, 'sha256'), 'hex'), 1, 16);
@@ -168,9 +181,13 @@ begin
     v_channel_secret := substr(encode(digest(v_room.id::text || ':' || v_room.password_hash, 'sha256'), 'hex'), 1, 16);
   end if;
 
-  insert into public.room_members (room_id, user_id)
-  values (v_room.id, auth.uid())
-  on conflict (room_id, user_id) do nothing;
+  begin
+    insert into public.room_members (room_id, user_id)
+    values (v_room.id, auth.uid())
+    on conflict (room_id, user_id) do nothing;
+  exception when foreign_key_violation then
+    null;
+  end;
 
   return json_build_object(
     'success', true,

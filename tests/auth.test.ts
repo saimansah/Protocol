@@ -223,4 +223,17 @@ describe('Safe Supabase Anonymous Authentication', () => {
 
     expect(mockRoomMember.user_id).toBe(user.id);
   });
+
+  // TEST 8: Recovery from foreign key / stale session error via forceRefresh
+  it('8. Forces session refresh when recovering from stale session or foreign key violation', async () => {
+    mockSession = {
+      user: { id: 'stale-wiped-user-999', is_anonymous: true },
+    };
+
+    // Stale session re-authenticated with forceRefresh to obtain a valid user
+    const freshUser = await authManager.ensureAnonymousAuth({ forceRefresh: true });
+    expect(freshUser.id).toBeDefined();
+    expect(freshUser.id).not.toBe('stale-wiped-user-999');
+    expect(signInCalls).toBe(1);
+  });
 });

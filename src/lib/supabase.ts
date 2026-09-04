@@ -91,7 +91,16 @@ export async function ensureAnonymousAuth(options?: AnonymousAuthOptions): Promi
       console.warn('Session verification notice:', sessionError.message);
     }
     if (session?.user) {
-      return session.user;
+      try {
+        const { data: { user }, error: userError } = await supabase.auth.getUser();
+        if (!userError && user) {
+          return user;
+        }
+        console.warn('Cached session is invalid or user was removed from auth.users. Resetting session...');
+        await supabase.auth.signOut();
+      } catch {
+        return session.user;
+      }
     }
   }
 
@@ -106,7 +115,15 @@ export async function ensureAnonymousAuth(options?: AnonymousAuthOptions): Promi
       // Re-verify session in case another caller just resolved it
       const { data: { session: existingSession } } = await supabase.auth.getSession();
       if (existingSession?.user && !options?.forceRefresh) {
-        return existingSession.user;
+        try {
+          const { data: { user }, error: userError } = await supabase.auth.getUser();
+          if (!userError && user) {
+            return user;
+          }
+          await supabase.auth.signOut();
+        } catch {
+          return existingSession.user;
+        }
       }
 
       const signInParams: { options?: { captchaToken?: string } } = {};

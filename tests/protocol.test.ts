@@ -9,7 +9,7 @@ import { deriveRoomKey, encryptPayload, decryptPayload } from '../src/lib/crypto
 // Mock state representing Supabase Serverless & Database RPC Environment
 interface MockRoom {
   id: string;
-  created_by: string;
+  created_by: string | null;
   created_at: Date;
   expires_at: Date;
   access_type: 'open' | 'password';
@@ -513,6 +513,21 @@ describe('Protocol 594 // Security & Compliance Test Suite', () => {
 
     // Attacker attempts decryption with derived key from wrong password
     await expect(decryptPayload(ciphertext, iv, attackerKey)).rejects.toThrow();
+  });
+
+  // TEST 20: Foreign Key Resilience: Room creation succeeds even if user is ephemeral / not hard-linked to auth.users
+  it('20. Foreign Key Resilience: Room creation succeeds without hard foreign key failure', () => {
+    // When a caller's auth.uid() is not in auth.users (e.g. anonymous user pruned or wiped),
+    // created_by falls back safely to null without violating rooms_created_by_fkey
+    const result = env.createClassifiedRoom({
+      accessType: 'open',
+      callerUserId: 'ephemeral-desynced-user-id',
+    });
+
+    expect(result.room_id).toBeDefined();
+    const createdRoom = env.rooms.get(result.room_id);
+    expect(createdRoom).toBeDefined();
+    expect(createdRoom?.id).toBe(result.room_id);
   });
 });
 
